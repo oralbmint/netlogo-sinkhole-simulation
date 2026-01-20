@@ -89,6 +89,18 @@ NetLogo를 활용한 도심 지반침하 현상의 교육용 시뮬레이션입�
 - 교육 자료의 상업적 판매 금지
 - 저작자 표시 의무
 
+## 📝 인용 (Citation)
+
+이 시뮬레이션을 연구나 교육에 활용하신 경우:
+```bibtex
+@software{park2026sinkhole,
+  author = {Park, Hongjoon},
+  title = {Urban Sinkhole Formation Simulation},
+  year = {2026},
+  version = {7.7},
+  url = {https://github.com/oralbmint/netlogo-sinkhole-simulation}
+}
+```
 ## 🔖 버전 정보
 
 - **현재 버전**: v7.7
