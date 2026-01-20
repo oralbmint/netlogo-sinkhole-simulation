@@ -4,6 +4,7 @@ NetLogo를 활용한 도심 지반침하 현상의 교육용 시뮬레이션입�
 
 ## 👨‍🏫 개발자
 **박홍준 | Park, Hongjoon**  
+전남대학교 (Chonnam National University)
 
 ## 📋 프로젝트 소개
 
