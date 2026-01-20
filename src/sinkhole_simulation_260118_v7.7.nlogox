@@ -1,0 +1,2010 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.3" snapToGrid="false">
+  <code><![CDATA[; ================================================================================
+; SINKHOLE SIMULATION - Educational Version
+; ================================================================================
+; Version: v7.7
+; Description: Urban area sinkhole formation mechanism simulation
+;
+; Author: Park, Hongjoon
+; Affiliation: Chonnam National University
+;
+; Copyright (c) 2025 Park, Hongjoon. All rights reserved.
+; License: CC BY-NC-SA 4.0
+;
+; Development Period: 2025-2026
+; Last Updated: January 2026
+; ================================================================================
+
+; ================================================================================
+; 1. 전역 변수 및 상수 정의
+; ================================================================================
+
+globals [ 
+  total-soil-loss          ; 총 토양 유실량
+  cavity-size              ; 전체 공동 크기 (모든 공동 부피의 합)
+  collapse-occurred?       ; 붕괴 발생 여부
+  time-to-collapse         ; 붕괴까지 걸린 시간 (틱 단위)
+  groundwater-flow         ; 지하수 흐름 속도 (전역변수)
+  effective-stress         ; 유효 응력
+  danger-index             ; 위험 지수 (0-100)
+  excavation-position      ; 굴착 공사 위치 (x 좌표)
+  show-cavities?           ; 공동 보이기 / 숨기기 토글
+  WATER-FLOW-THRESHOLD         ; 물 흐름 생성을 위한 최소 수분 포화도 (%)
+  EXCAVATION-EROSION-THRESHOLD ; 굴착 침식 발생을 위한 최소 수분 포화도 (%)
+]
+
+breed [soil-particles particle]  ; 토양 입자 breed
+breed [water-flows flow]          ; 지하수 흐름 방향 표시 breed
+breed [cavities cavity]           ; 공동 breed
+breed [excavations excavation]    ; 굴착 현장 표시 breed
+breed [persons person]            ; 지표 하중 표시용 사람 breed
+
+soil-particles-own [
+  soil-type                ; 토양 타입: "sand", "clay", "gravel"
+  is-fine-particle?        ; 세립토 여부 (침식 취약성 판단)
+  stability                ; 입자 안정성 (0-100, 높을수록 안정적)
+  lost?                    ; 유실 여부 플래그
+]
+
+water-flows-own [
+  velocity                 ; 지하수 흐름 속도 (터틀 변수)
+  carrying-capacity        ; 토양 운반 능력
+]
+
+cavities-own [
+  cavity-depth             ; 공동의 깊이 (수직 방향)
+  cavity-width             ; 공동의 너비 (수평 방향)
+  growth-rate              ; 공동 성장 속도
+]
+
+patches-own [
+  layer-type               ; 지층 타입: "sky", "grass", "surface", "fills", "weathered-soil", "weathered-rock", "rock-layer"
+  has-pipe?                ; 관로 존재 여부
+  pipe-health              ; 관로 건강도 (0-100, 높을수록 양호)
+  water-saturation         ; 수분 포화도 (0-100, 높을수록 물이 많음)
+  soil-density             ; 토양 밀도 (다짐도와 연관)
+  permeability             ; 투수성 (0-100, 높을수록 물이 잘 통과)
+  has-cavity?              ; 공동 존재 여부
+  cavity-volume            ; 해당 패치의 공동 부피
+]
+
+; ================================================================================
+; 2. 시뮬레이션 초기화
+; ================================================================================
+
+to setup
+  clear-all
+  
+  ; 상수 초기화
+  set WATER-FLOW-THRESHOLD 30              ; 물 흐름 생성 최소 포화도 30%
+  set EXCAVATION-EROSION-THRESHOLD 35       ; 굴착 침식 최소 포화도 35%
+  
+  ; 전역 변수 초기화
+  set total-soil-loss 0                     ; 토양 유실량 0으로 시작
+  set cavity-size 0                         ; 공동 크기 0으로 시작
+  set collapse-occurred? false              ; 붕괴 발생 안함
+  set time-to-collapse 0                    ; 붕괴까지 시간 0
+  set danger-index 0                        ; 위험 지수 0
+  set excavation-position random 15 - 10    ; 굴착 위치 무작위 설정 (-10 ~ 4)
+  set show-cavities? true                   ; 공동 표시 켜기
+  
+  ; 초기 환경 설정
+  setup-soil-layers          ; 지층 구조 생성
+  setup-underground-pipes    ; 지하 관로 배치
+  setup-groundwater          ; 지하수 설정
+  setup-soil-particles       ; 토양 입자 생성
+  
+  reset-ticks
+end
+
+; 공동 표시/숨기기 토글 프로시저
+to cavity-display
+  set show-cavities? not show-cavities?     ; 상태 반전
+  ifelse show-cavities? [
+    ask cavities [ show-turtle ]            ; 공동 보이기
+  ][
+    ask cavities [ hide-turtle ]            ; 공동 숨기기
+  ]
+end
+
+; ================================================================================
+; 3. 지층 구조 설정
+; ================================================================================
+
+to setup-soil-layers
+  ; 지층 경계선 y좌표 정의
+  let sky-bottom (max-pycor - 9)            ; 하늘층 하단
+  let grass-layer (max-pycor - 9)           ; 잔디층
+  let surface-bottom (max-pycor - 16)       ; 표토층 하단
+  let fills-bottom (max-pycor - 22)         ; 성토층 하단 (관로 위치)
+  let weathered-soil-bottom (max-pycor - 30) ; 풍화토층 하단
+  let weathered-rock-bottom (max-pycor - 38) ; 풍화암층 하단
+
+  ; 지표 하중을 나타내는 사람 에이전트 생성
+  create-persons surface-load [
+    setxy random-xcor grass-layer + 1       ; 잔디층 위에 무작위 배치
+    set size 1.5
+    set shape "person"
+  ]
+
+  ; 모든 패치에 대해 지층 속성 설정
+  ask patches [
+    ; y좌표에 따라 지층 타입과 색상 할당
+    if pycor > sky-bottom [
+      set layer-type "sky"
+      set pcolor sky
+    ]
+
+    if pycor = grass-layer [
+      set layer-type "grass"
+      set pcolor green
+    ]
+
+    if pycor <= grass-layer - 1 and pycor > surface-bottom [
+      set layer-type "surface"              ; 표토층
+      set pcolor brown + 2
+    ]
+
+    if pycor <= surface-bottom and pycor > fills-bottom [
+      set layer-type "fills"                ; 성토층 (관로 매설 구간)
+      set pcolor brown
+    ]
+
+    if pycor <= fills-bottom and pycor > weathered-soil-bottom [
+      set layer-type "weathered-soil"       ; 풍화토층
+      set pcolor grey + 2
+    ]
+
+    if pycor <= weathered-soil-bottom and pycor > weathered-rock-bottom [
+      set layer-type "weathered-rock"       ; 풍화암층
+      set pcolor grey
+    ]
+
+    if pycor <= weathered-rock-bottom [
+      set layer-type "rock-layer"           ; 기반암층
+      set pcolor grey - 2
+    ]
+
+    ; 토양 물리적 속성 초기화
+    set soil-density compaction-degree      ; 다짐도를 밀도로 설정
+    set permeability 100 - compaction-degree ; 투수성은 다짐도와 반비례
+    set has-cavity? false                   ; 공동 없음
+    set cavity-volume 0                     ; 공동 부피 0
+    set has-pipe? false                     ; 관로 없음
+    set water-saturation 0                  ; 수분 포화도 0 (지하수 설정 전)
+    set pipe-health 100                     ; 관로 건강도 최대
+  ]
+  
+  ; 굴착 현장 표시 에이전트 생성
+  create-excavations 1 [
+    setxy excavation-position 45 - 7        ; 굴착 위치에 깃발 표시
+    set size 3
+    set shape "flag"
+    set color grey + 2
+  ]
+end
+
+; ================================================================================
+; 4. 지하 관로 설정
+; ================================================================================
+
+to setup-underground-pipes
+  ; 클러스터 기반 관로 배치 시스템
+  ; 실제 도시의 관로는 집중 배치되는 경향을 반영
+  
+  let num-clusters 2 + random 3             ; 2~4개의 클러스터 생성
+  let cluster-centers n-of num-clusters patches with [layer-type = "fills"]  ; 성토층에서 중심점 선택
+
+  ; 각 클러스터 중심 주변에 관로 밀집 배치
+  ask cluster-centers [
+    ask patches with [layer-type = "fills" and distance myself < 15] [
+      let d distance myself                 ; 중심으로부터의 거리
+      ; 거리에 따라 관로 배치 확률 차등 적용
+      let placement-prob ifelse-value d < 5 [70] ifelse-value d < 10 [50] ifelse-value d < 15 [20][0]
+      if random 100 < placement-prob [
+        set has-pipe? true                  ; 관로 배치
+        set pipe-health pipe-condition      ; 초기 관로 상태 설정
+        set pcolor black                    ; 관로는 검은색으로 표시
+      ]
+    ]
+  ]
+end
+
+; ================================================================================
+; 5. 지하수 설정
+; ================================================================================
+
+to setup-groundwater
+  ; 지층 깊이 계산
+  let grass-depth 10                        ; 잔디층까지 깊이
+  let surface-depth 6                       ; 표토층까지 깊이
+  let groundwater-base-depth (grass-depth + surface-depth + initial-groundwater-depth)  ; 지하수면 깊이
+
+  ask patches [
+    ; 지하수면 아래 패치에 수분 포화도 설정
+    if pycor < max-pycor - groundwater-base-depth [
+      set water-saturation random 50        ; 0~49% 무작위 포화도
+      set pcolor sky + (random-float 1.5)   ; 파란색 계열로 시각화
+    ]
+  ]
+end
+
+; ================================================================================
+; 6. 토양 입자 설정
+; ================================================================================
+
+to setup-soil-particles
+  ; 특정 지층에만 토양 입자 생성 (표토층, 풍화토층, 관로 없는 성토층)
+  ask patches with [layer-type = "surface" or layer-type = "weathered-soil" or (layer-type = "fills" and has-pipe? = false)][
+    if random 100 < 70 [                    ; 70% 확률로 입자 생성
+      sprout-soil-particles 4 [             ; 패치당 4개 입자
+        set shape "circle"
+        set size 0.6
+        set lost? false                     ; 초기엔 유실되지 않음
+      
+        ; 사용자가 선택한 토양 타입에 따라 속성 설정
+        if soil-type-selection = "sand" [   ; 모래
+          set soil-type "sand"
+          set is-fine-particle? true        ; 세립토
+          set color yellow
+          set stability 20 + random 30      ; 안정성 20~49
+        ]
+      
+        if soil-type-selection = "gravel" [ ; 자갈
+          set soil-type "gravel"
+          set is-fine-particle? false       ; 조립토
+          set color violet
+          set stability 40 + random 50      ; 안정성 40~89
+        ]
+      
+        if soil-type-selection = "clay" [   ; 점토
+          set soil-type "clay"
+          set is-fine-particle? true        ; 세립토
+          set color orange
+          set stability 30 + random 40      ; 안정성 30~69
+        ]
+      
+        if soil-type-selection = "mixed" [  ; 혼합토
+          let rand random 100
+          ifelse rand < 33 [                ; 33% 모래
+            set soil-type "sand"
+            set is-fine-particle? true
+            set color yellow
+            set stability 20 + random 30
+          ] [
+            ifelse rand < 66 [              ; 33% 점토
+              set soil-type "clay"
+              set is-fine-particle? true
+              set color orange
+              set stability 30 + random 40
+            ] [                             ; 34% 자갈
+              set soil-type "gravel"
+              set is-fine-particle? false
+              set color violet
+              set stability 40 + random 50
+            ]
+          ]
+        ]
+      
+        ; 다짐도에 따라 안정성 조정 (다짐도 높을수록 안정적)
+        set stability stability * (compaction-degree / 100)
+      ]
+    ]
+  ]
+end
+
+; ================================================================================
+; 7. 메인 시뮬레이션 루프
+; ================================================================================
+
+to go
+  ; 붕괴 발생 시 시뮬레이션 종료
+  if collapse-occurred? [
+    ask patch 0 43 [ set plabel "Finished"]
+    stop
+  ]
+
+  ; 시뮬레이션 단계별 실행
+  apply-rainfall              ; 강우 효과 적용
+  update-groundwater          ; 지하수 변화 업데이트
+  create-water-flow           ; 지하수 흐름 시각화
+  pipe-erosion-and-cavity     ; 관로 침식 및 공동 생성
+  apply-excavation-effect     ; 굴착 효과 적용
+  erode-particles             ; 세립토 침식
+  expand-cavities             ; 공동 확장
+  apply-load                  ; 지표 하중 적용
+  check-collapse              ; 붕괴 여부 확인
+  update-statistics           ; 통계 업데이트
+
+  tick
+  ; 붕괴 전까지 경과 시간 누적
+  if not collapse-occurred? [
+    set time-to-collapse time-to-collapse + 1
+  ]
+end
+
+; ================================================================================
+; 8. 강우 효과
+; ================================================================================
+
+to apply-rainfall
+  if rainfall-intensity > 0 [               ; 강우가 있을 때만 실행
+    ; 하늘층에 비 내리는 효과 시각화
+    ask patches with [layer-type = "sky"] [
+      if random 100 < rainfall-intensity [
+        set pcolor sky - random-float 0.5   ; 색상 변화로 비 표현
+        set pcolor sky + random-float 0.8
+      ]
+    ]
+
+    ; 지하수 포화도 증가 (비선형 효과)
+    let rain-increment (rainfall-intensity / 50) ^ 1.1  ; 지수 함수 적용
+    ask patches with [water-saturation > 0] [
+      set water-saturation min list 100 (water-saturation + rain-increment)
+    ]
+
+    ; 표층부 침투 효과
+    ask patches with [layer-type = "surface" or layer-type = "fills"] [
+      if water-saturation < 85 and random 100 < rainfall-intensity [
+        set water-saturation water-saturation + (random 3 + 1)  ; 1~3 증가
+      ]
+    ]
+  ]
+end
+
+; ================================================================================
+; 9. 지하수 업데이트
+; ================================================================================
+
+to update-groundwater
+  ; 지하수 확산: 높은 포화도 패치에서 낮은 포화도 패치로 이동
+  ask patches with [water-saturation > 60] [
+    ask neighbors4 with [water-saturation < 50] [
+      set water-saturation min list 100 (water-saturation + groundwater-change-rate / 30)
+    ]
+  ]
+
+  ; 지하수 시각화: 파란색 계열로 표시
+  ask patches with [water-saturation > 60 and layer-type != "sky" and layer-type != "grass"] [
+    if random 100 < 30 [
+      set pcolor sky + (random-float 0.6 - 0.3)  ; 색상 변화 (-0.3 ~ +0.3)
+    ]
+  ]
+
+  ; 굴착으로 인한 배수 효과
+  if excavation-depth > 0 [
+    let drainage-zone-top 36 - excavation-depth  ; 굴착 깊이에 따른 배수 영역
+    ask patches with [pycor > drainage-zone-top and water-saturation > 60] [
+      set water-saturation max list 0 (water-saturation - random-float 5.0)  ; 수분 감소
+    ]
+  ]
+end
+
+; ================================================================================
+; 10. 지하수 흐름 시각화
+; ================================================================================
+
+to create-water-flow
+  ask water-flows [ die ]                   ; 이전 틱의 흐름 제거
+
+  ; 공동이 있고 수분이 충분한 곳에서 흐름 생성
+  ask patches with [water-saturation > WATER-FLOW-THRESHOLD and has-cavity?] [
+    if random 100 < 50 [                    ; 50% 확률로 흐름 생성
+      sprout-water-flows 1 [
+        set shape "arrow"
+        set color cyan
+        set size 1.0
+        ; 흐름 속도 계산: 지하수 변화율과 투수성에 비례
+        set velocity groundwater-change-rate * permeability / 100
+        set carrying-capacity velocity * 2  ; 운반 능력은 속도의 2배
+      
+        ; 흐름 방향 설정: 손상된 관로나 공동 쪽으로 향함
+        if any? patches with [has-pipe? and pipe-health < 50] [
+          face one-of patches with [has-pipe? and pipe-health < 50]
+        ]
+        if any? patches with [has-cavity?] [
+          face one-of patches with [has-cavity?]
+        ]
+      ]
+    ]
+  ]
+
+  ; 물 흐름 이동
+  ask water-flows [
+    forward velocity / 10                   ; 속도에 비례하여 이동
+    if not can-move? 1 [ die ]              ; 경계에 도달하면 소멸
+  ]
+end
+
+; ================================================================================
+; 11. 관로 누수 침식 및 공동 생성
+; ================================================================================
+
+to pipe-erosion-and-cavity
+  ask patches with [has-pipe?] [
+    let erosion-prob 0
+    
+    ; 1) 기본 침식 확률: 관로 건강도에 반비례
+    let base-erosion (100 - pipe-health) * 0.10
+    
+    ; 2) 환경 요인별 가중치 계산 (비선형 효과)
+    let water-factor 1 + ((water-saturation / 100) ^ 1.5 * 0.6)     ; 수분 포화도 영향
+    let rain-factor 1 + ((rainfall-intensity / 50) ^ 1.3 * 0.4)      ; 강우 강도 영향
+    let excavation-factor 1 + ((excavation-depth / 25) ^ 1.4 * 0.3) ; 굴착 깊이 영향
+    let compaction-factor 1 + ((100 - compaction-degree) / 100 * 0.5) ; 다짐도 영향 (낮을수록 침식 쉬움)
+    
+    ; 3) 최종 침식 확률 계산 (최대 85%)
+    set erosion-prob min list 85 (base-erosion * water-factor * rain-factor * excavation-factor * compaction-factor)
+    
+    ; 침식 발생
+    if random 100 < erosion-prob [
+      ; 세립토 입자 유실
+      ask soil-particles-here [
+        if is-fine-particle? and random 100 < (erosion-prob * 0.7) [
+          set lost? true
+          set total-soil-loss total-soil-loss + 1
+          die
+        ]
+      ]
+      
+      ; 관로 건강도 감소 (피드백 루프: 침식 발생 → 관로 악화 → 침식 가속)
+      set pipe-health max list 0 (pipe-health - 0.5)
+      
+      ; 주변 패치로 침식 확산 (확률 낮음)
+      ask neighbors [
+        if random 100 < (erosion-prob * 0.25) [
+          ask soil-particles-here [
+            if is-fine-particle? and random 100 < (erosion-prob * 0.25) [
+              set lost? true
+              set total-soil-loss total-soil-loss + 1
+              die
+            ]
+          ]
+        ]
+      ]
+      
+      ; 공동 생성 조건: 토양 입자가 거의 없을 때
+      if not has-cavity? and count soil-particles-here < 2 [
+        set has-cavity? true
+        set cavity-volume 0.3               ; 초기 공동 크기
+        set pcolor black                    ; 공동은 검은색
+        
+        ; 공동 에이전트 생성
+        sprout-cavities 1 [
+          set shape "circle"
+          set color [255 0 0 128]           ; 반투명 빨간색
+          set size 0.8
+          set cavity-depth 0.8
+          set cavity-width 0.8
+          set growth-rate 0.008             ; 초기 성장 속도
+        ]
+      ]
+    ]
+  ]
+end
+
+; ================================================================================
+; 12. 굴착 효과
+; ================================================================================
+
+to apply-excavation-effect
+  ; 굴착 영역 계산
+  let excavation-zone-top max-pycor - 10
+  let excavation-zone-bottom excavation-zone-top + 1 - excavation-depth
+
+  if excavation-depth > 5 [                 ; 굴착 깊이 5m 초과 시에만 영향
+    ; 굴착 위치의 수직 구간에서 침식 발생
+    ask patches with [pycor <= excavation-zone-top and pycor >= excavation-zone-bottom and pxcor = excavation-position and water-saturation > EXCAVATION-EROSION-THRESHOLD][
+      
+      ; 굴착 깊이에 따른 비선형 침식 효과
+      let depth-factor (excavation-depth / 25) ^ 1.2  ; 깊을수록 급격히 증가
+      let excavation-erosion-prob depth-factor * 0.3
+      
+      ; 수분 포화도 추가 영향
+      let saturation-factor (water-saturation - EXCAVATION-EROSION-THRESHOLD) / 100
+      set excavation-erosion-prob excavation-erosion-prob * (1 + saturation-factor)
+      
+      ; 토양 입자 유실
+      ask soil-particles-here [
+        if random-float 1.0 < excavation-erosion-prob [
+          set lost? true
+          set total-soil-loss total-soil-loss + 1
+          die
+        ]
+      ]
+      
+      ; 공동 생성 (굴착으로 인한 공동은 조금 더 큰 조건)
+      if not has-cavity? and count soil-particles-here < 3 [
+        set has-cavity? true
+        set cavity-volume 0.4               ; 관로보다 조금 큰 초기 크기
+        set pcolor black
+        
+        sprout-cavities 1 [
+          set shape "circle"
+          set color [255 0 0 128]
+          set size 0.9
+          set cavity-depth 0.9
+          set cavity-width 0.9
+          set growth-rate 0.012             ; 굴착 공동은 더 빠르게 성장
+        ]
+      ]
+    ]
+  ]
+end
+
+; ================================================================================
+; 13. 세립토 침식
+; ================================================================================
+
+to erode-particles
+  ; 지하수 흐름에 의한 토양 입자 침식
+  ask water-flows [
+    ask soil-particles in-radius 2 [        ; 반경 2 내의 입자
+      if is-fine-particle? [                ; 세립토만 침식
+        ; 침식 확률 계산: 흐름 속도와 투수성에 비례, 안정성에 반비례
+        let base-erosion-prob ([velocity] of myself * [permeability] of patch-here / 100)
+        let erosion-prob base-erosion-prob * (100 - stability) / 100
+      
+        if random-float 1.0 < erosion-prob / 50 [
+          set lost? true
+          set total-soil-loss total-soil-loss + 1
+          die
+        ]
+      ]
+    ]
+  ]
+end
+
+; ================================================================================
+; 14. 공동 확장
+; ================================================================================
+
+to expand-cavities
+  ask cavities [
+    ; 다중 요인 기반 성장률 계산 (모든 요인이 비선형으로 작용)
+    
+    ; 지하수 변화율 영향 (제곱 효과)
+    let groundwater-effect (groundwater-change-rate / 30) ^ 1.5 / 800
+    
+    ; 토양 유실 영향 (로그 스케일: 초반 빠르고 후반 완만)
+    let soil-loss-effect (ln (total-soil-loss + 1)) / 400
+    
+    ; 강우 강도 영향
+    let rainfall-effect (rainfall-intensity / 50) ^ 1.2 / 1000
+    
+    ; 굴착 깊이 영향
+    let excavation-effect (excavation-depth / 25) ^ 1.3 / 800
+    
+    ; 다짐도 영향 (낮을수록 빠른 확장)
+    let compaction-effect (100 - compaction-degree) / 100 / 500
+    
+    ; 총 성장 증가량
+    let growth-increment groundwater-effect + soil-loss-effect + rainfall-effect + excavation-effect + compaction-effect
+    
+    ; 최대 성장률 동적 설정 (조건이 나쁠수록 빠르게 성장)
+    let max-growth-rate 0.02 + (groundwater-change-rate / 30 * 0.03) + (rainfall-intensity / 50 * 0.02)
+    
+    set growth-rate min list max-growth-rate (growth-rate + growth-increment)
+    wait 0.0001                             ; 시각적 효과
+
+    ; 공동 크기 증가
+    set cavity-depth cavity-depth + growth-rate
+    set cavity-width cavity-width + growth-rate / 2.5
+    set size min list 3.5 cavity-width      ; 최대 크기 제한
+
+    ask patch-here [
+      set cavity-volume cavity-volume + [growth-rate] of myself
+
+      ; 수평 확산: 공동이 일정 크기 이상이면 주변으로 확산
+      let spread-threshold 15 - (groundwater-change-rate / 30 * 5) - (rainfall-intensity / 50 * 3)
+      set spread-threshold max list 8 spread-threshold  ; 최소 임계값 8
+      
+      if cavity-volume > spread-threshold [
+        ; 확산 확률 계산 (파라미터에 따라 동적 조정)
+        let spread-prob 5 + (groundwater-change-rate / 30 * 8) + (rainfall-intensity / 50 * 5)
+        
+        ask neighbors4 [
+          if not has-cavity? and random 100 < spread-prob [
+            set has-cavity? true
+            set cavity-volume 0.4
+            set pcolor black
+            
+            ; 새로운 공동 생성
+            sprout-cavities 1 [
+              set shape "circle"
+              set color [255 0 0 128]
+              set size 0.7
+              set cavity-depth 0.8
+              set cavity-width 0.8
+              set growth-rate 0.008
+            ]
+          ]
+        ]
+      ]
+    ]
+
+    ; 수직 확장: 공동이 위쪽으로 성장
+    let vertical-prob 15 + (groundwater-change-rate / 30 * 15) + (rainfall-intensity / 50 * 10)
+    
+    if random 100 < vertical-prob [
+      let target-patch patch-at 0 1         ; 바로 위 패치
+
+      if target-patch != nobody [
+        ask target-patch [
+          if not has-cavity? [
+            ; 위쪽 토양 입자 침식
+            ask soil-particles-here [
+              if random 100 < 30 [
+                set lost? true
+                set total-soil-loss total-soil-loss + 1
+                die
+              ]
+            ]
+            
+            ; 공동으로 전환
+            if count soil-particles-here < 2 [
+              set has-cavity? true
+              set cavity-volume [cavity-volume] of myself / 2.5  ; 부피는 감소
+              set pcolor black
+            ]
+          ]
+        ]
+      ]
+    ]
+  ]
+
+  ; 전체 공동 크기 계산 (모든 공동 부피의 합)
+  set cavity-size sum [cavity-volume] of patches with [has-cavity?]
+end
+
+; ================================================================================
+; 15. 지표 하중 적용
+; ================================================================================
+
+to apply-load
+  ; 표토층에서 공동에 하중 가하기
+  ask patches with [layer-type = "surface"] [
+    ; 반경 3 이내에 큰 공동이 있으면 하중 영향
+    if any? patches in-radius 3 with [has-cavity? and cavity-volume > 3] [
+      if random 100 < (surface-load / 2) [  ; 하중 크기에 비례하는 확률
+        let below-patch patch-at 0 -1       ; 바로 아래 패치
+      
+        if below-patch != nobody [
+          ask below-patch [
+            ; 아래 토양 입자 유실
+            ask soil-particles-here [
+              set lost? true
+              set total-soil-loss total-soil-loss + 1
+              die
+            ]
+          ]
+        ]
+      ]
+    ]
+  ]
+end
+
+; ================================================================================
+; 16. 붕괴 확인
+; ================================================================================
+
+to check-collapse
+  let exit-early? false                     ; 붕괴 발생 시 조기 종료 플래그
+  ask patches with [layer-type = "surface"] [
+    if not exit-early? [
+      ; 동적 임계값 계산: 조건이 나쁠수록 작은 공동에서도 붕괴
+      let critical-volume 18 - (groundwater-change-rate / 30 * 8) - (rainfall-intensity / 50 * 6) - (excavation-depth / 25 * 4) - ((100 - compaction-degree) / 100 * 10)
+      set critical-volume max list 5 critical-volume  ; 최소 임계값 5
+      
+      ; 반경 4 내의 위험한 공동 찾기
+      let cavity-below patches in-radius 4 with [has-cavity? and cavity-volume > critical-volume]
+      
+      if any? cavity-below [
+        ; 지지력 계산
+        let particle-support count soil-particles in-radius 3  ; 주변 토양 입자 수
+        let density-factor soil-density / 100
+        
+        ; 다짐도의 제곱 효과 반영 (비선형)
+        let support-strength (density-factor ^ 1.5) * particle-support * 0.3
+        
+        ; 수분 포화도 영향 (높을수록 지지력 급격히 감소)
+        let avg-saturation mean [water-saturation] of patches in-radius 3
+        let saturation-penalty 1 - ((avg-saturation / 100) ^ 1.8 * 0.7)
+        set support-strength support-strength * saturation-penalty
+
+        ; 하중 압력 계산
+        let cavity-pressure sum [cavity-volume] of cavity-below
+        let load-pressure surface-load * 0.8 + cavity-pressure / 15
+
+        ; 붕괴 조건: 지지력 < 하중 압력
+        if support-strength < load-pressure [
+          set collapse-occurred? true
+          set exit-early? true
+
+          ; 가장 큰 공동 위치 찾기
+          let largest-cavity max-one-of cavity-below [cavity-volume]
+          let collapse-x [pxcor] of largest-cavity
+          let collapse-y [pycor] of largest-cavity
+          
+          ; 붕괴 크기 계산 (공동 크기에 비례)
+          let total-cavity-volume sum [cavity-volume] of cavity-below
+          let size-factor total-cavity-volume / 18
+          
+          let collapse-width max list 3 (min list 9 (3 + size-factor * 0.6))
+          let collapse-depth max list 4 (min list 12 (4 + size-factor * 0.7))
+          
+          ; 붕괴 타입 결정
+          ifelse compaction-degree < 55 or groundwater-change-rate > 12 [
+            ; Punching 붕괴: 좁고 깊은 함몰 (다짐 불량 또는 지하수 높음)
+            ask patches with [pycor > collapse-y - collapse-depth and pycor < max-pycor - 8 and abs(pxcor - collapse-x) < collapse-width] [
+              if layer-type != "sky" [
+                set pcolor black
+                set has-cavity? true
+                ask soil-particles-here [ die ]
+              ]
+            ]
+            
+            ; 지표 함몰 범위 표시 (빨간색)
+            ask patch collapse-x (max-pycor - 10) [
+              ask patches in-radius (collapse-width * 0.8) [
+                if layer-type != "sky" [ set pcolor red - 2 ]
+              ]
+            ]
+          ] [
+            ; Trough 붕괴: 넓고 얕은 함몰 (다짐 양호 또는 지하수 낮음)
+            ask patches with [pycor > collapse-y - (collapse-depth * 0.6) and pycor < max-pycor - 8 and abs(pxcor - collapse-x) < (collapse-width * 1.4)] [
+              if layer-type != "sky" and random 100 < 65 [
+                set pcolor black
+                set has-cavity? true
+                ask soil-particles-here [
+                  if random 100 < 75 [ die ]
+                ]
+              ]
+            ]
+            
+            ; 지표 함몰 범위 표시 (밝은 빨간색)
+            ask patch collapse-x (max-pycor - 10) [
+              ask patches in-radius (collapse-width * 1.2) [
+                if layer-type != "sky" [ set pcolor red + 2 ]
+              ]
+            ]
+          ]
+        ]
+      ]
+    ]
+  ]
+end
+
+; ================================================================================
+; 17. 통계 업데이트
+; ================================================================================
+
+to update-statistics
+  ; 위험 지수 계산 (0-100)
+  let cavity-factor min list 50 (cavity-size * 2)      ; 공동 크기 기여분 (최대 50)
+  let soil-loss-factor min list 30 (total-soil-loss / 10)  ; 토양 유실 기여분 (최대 30)
+  let load-factor min list 20 (surface-load / 5)       ; 하중 기여분 (최대 20)
+
+  set danger-index cavity-factor + soil-loss-factor + load-factor
+
+  ; 붕괴 발생 시 위험 지수 최대
+  if collapse-occurred? [
+    set danger-index 100
+  ]
+
+  ; 평균 지하수 흐름 속도 계산
+  ifelse any? water-flows [
+    set groundwater-flow mean [velocity] of water-flows
+  ] [
+    set groundwater-flow 0
+  ]
+
+  ; 유효 응력 계산 (다짐도, 공동 크기, 토양 유실 종합 고려)
+  set effective-stress compaction-degree * (1 - cavity-size / 100) * (1 - total-soil-loss / 1000)
+end
+
+; ================================================================================
+; 끝
+; ================================================================================]]></code>
+  <widgets>
+    <view x="230" wrappingAllowedX="false" y="7" frameRate="30.0" minPycor="0" height="327" showTickCounter="true" patchSize="7.0" fontSize="10" wrappingAllowedY="false" width="433" tickCounterLabel="ticks" maxPycor="45" updateMode="0" maxPxcor="30" minPxcor="-30"></view>
+    <button x="10" y="8" height="35" disableUntilTicks="false" forever="false" kind="Observer" width="66" display="Setup">setup</button>
+    <note x="10" y="52" backgroundDark="0" fontSize="11" width="150" markdown="false" height="18" textColorDark="-1" textColorLight="-16777216" backgroundLight="0">Ground Properties</note>
+    <note x="10" y="406" backgroundDark="0" fontSize="11" width="150" markdown="false" height="18" textColorDark="-1" textColorLight="-16777216" backgroundLight="0">Anthropogenic Factors</note>
+    <note x="10" y="202" backgroundDark="0" fontSize="11" width="150" markdown="false" height="18" textColorDark="-1" textColorLight="-16777216" backgroundLight="0">Hydraulic Factors</note>
+    <slider x="10" step="5" y="553" max="100" width="216" display="surface-load" height="50" min="0" direction="Horizontal" default="50.0" variable="surface-load"></slider>
+    <slider x="10" step="1" y="491" max="25" width="214" display="excavation-depth" height="50" min="0" direction="Horizontal" default="20.0" variable="excavation-depth"></slider>
+    <slider x="10" step="1" y="429" max="100" width="213" display="pipe-condition" height="50" min="0" direction="Horizontal" default="61.0" variable="pipe-condition"></slider>
+    <slider x="10" step="5" y="349" max="50" width="214" display="rainfall-intensity" height="50" min="0" direction="Horizontal" default="15.0" variable="rainfall-intensity"></slider>
+    <slider x="10" step="1" y="287" max="30" width="213" display="groundwater-change-rate" height="50" min="0" direction="Horizontal" default="5.0" variable="groundwater-change-rate"></slider>
+    <slider x="10" step="1" y="225" max="29" width="212" display="initial-groundwater-depth" height="50" min="6" direction="Horizontal" default="9.0" variable="initial-groundwater-depth"></slider>
+    <chooser x="10" y="137" height="60" variable="soil-type-selection" current="0" width="211" display="soil-type-selection">
+      <choice type="string" value="mixed"></choice>
+      <choice type="string" value="sand"></choice>
+      <choice type="string" value="gravel"></choice>
+      <choice type="string" value="clay"></choice>
+    </chooser>
+    <slider x="10" step="5" y="75" max="80" width="211" display="compaction-degree" height="50" min="30" direction="Horizontal" default="65.0" variable="compaction-degree" units="%"></slider>
+    <plot x="231" autoPlotX="true" yMax="50.0" autoPlotY="true" yAxis="Value" y="349" xMin="0.0" height="226" legend="true" xMax="100.0" yMin="0.0" width="434" xAxis="Time" display="Sinkhole Development">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="soil-loss/10" color="-2674135" legend="true">
+        <setup></setup>
+        <update>plot total-soil-loss / 10</update>
+      </pen>
+      <pen interval="1.0" mode="0" display="cavity/10" color="-13345367" legend="true">
+        <setup></setup>
+        <update>plot cavity-size / 10</update>
+      </pen>
+      <pen interval="1.0" mode="0" display="danger" color="-15040220" legend="true">
+        <setup></setup>
+        <update>plot danger-index</update>
+      </pen>
+    </plot>
+    <button x="669" y="8" height="35" disableUntilTicks="false" forever="false" kind="Observer" width="120">cavity-display</button>
+    <monitor x="673" precision="2" y="470" height="60" fontSize="11" width="140" display="Groundwater Flow">groundwater-flow</monitor>
+    <monitor x="672" precision="17" y="50" height="60" fontSize="11" width="100" display="soil-particles">count soil-particles</monitor>
+    <monitor x="673" precision="1" y="540" height="60" fontSize="11" width="140" display="Effective Stress">effective-stress</monitor>
+    <monitor x="673" precision="1" y="190" height="60" fontSize="11" width="105" display="Cavity Size">cavity-size</monitor>
+    <monitor x="673" precision="0" y="260" height="60" fontSize="11" width="103" display="Collapse?">collapse-occurred?</monitor>
+    <monitor x="673" precision="0" y="330" height="60" fontSize="11" width="115" display="Time to Collapse">time-to-collapse</monitor>
+    <monitor x="673" precision="1" y="400" height="60" fontSize="11" width="117" display="Danger Index">danger-index</monitor>
+    <monitor x="673" precision="0" y="120" height="60" fontSize="11" width="107" display="Total Soil Loss">total-soil-loss</monitor>
+    <button x="82" y="8" height="35" disableUntilTicks="false" forever="true" kind="Observer" width="63" display="Go">go</button>
+    <button x="151" y="8" height="35" disableUntilTicks="false" forever="false" kind="Observer" width="63" display="Go Once">go</button>
+  </widgets>
+  <info><![CDATA[# SINKHOLE SIMULATION - Educational Version
+
+## WHAT IS IT?
+
+이 시뮬레이션은 도시 지역에서 발생하는 싱크홀(지반침하)의 형성 메커니즘을 교육용으로 구현한 모델입니다. 지하 관로의 노후화, 지하수 흐름, 굴착 공사, 강우 등 다양한 요인들이 복합적으로 작용하여 지하에 공동(cavity)이 형성되고, 최종적으로 지표면이 붕괴되는 과정을 시각적으로 보여줍니다.
+
+This simulation is an educational model that demonstrates the formation mechanism of sinkholes (ground subsidence) in urban areas. It visually shows how various factors such as aging underground pipes, groundwater flow, excavation work, and rainfall interact to form underground cavities, ultimately leading to surface collapse.
+
+## HOW IT WORKS
+
+### 주요 메커니즘 (Key Mechanisms)
+
+#### 1. 지층 구조 (Soil Layers)
+시뮬레이션은 실제 도시 지반을 반영한 7개 층으로 구성됩니다:
+- **Sky (하늘)**: 대기층
+- **Grass (잔디층)**: 지표면
+- **Surface (표토층)**: 유기물이 풍부한 상부 토양
+- **Fills (성토층)**: 관로가 매설된 인공 성토 구간
+- **Weathered Soil (풍화토층)**: 풍화된 토양층
+- **Weathered Rock (풍화암층)**: 부분적으로 풍화된 암반
+- **Rock Layer (기반암층)**: 단단한 암반층
+
+#### 2. 지하 관로 시스템 (Underground Pipe System)
+- 관로는 성토층(Fills)에 **클러스터 기반**으로 배치됩니다 (실제 도시 관로의 집중 배치 패턴 반영)
+- 각 관로는 **건강도(pipe-health)** 속성을 가지며, 시간이 지남에 따라 침식으로 인해 감소합니다
+- 관로 건강도가 낮아질수록 누수와 침식이 가속화되는 **피드백 루프** 구조
+
+#### 3. 공동 형성 과정 (Cavity Formation Process)
+
+**단계 1: 침식 시작**
+- 관로 누수 또는 굴착으로 인해 지하수가 토양과 접촉
+- 세립토(모래, 점토)가 지하수 흐름에 의해 유실
+- 유실 확률은 다음 요인들의 **비선형 함수**로 계산:
+  - 수분 포화도^1.5
+  - 강우 강도^1.3
+  - 굴착 깊이^1.4
+  - (100 - 다짐도)
+
+**단계 2: 공동 생성**
+- 토양 입자가 일정 수준 이하로 감소하면 공동 발생
+- 초기 공동은 작은 크기(0.3-0.4)로 시작
+
+**단계 3: 공동 확장**
+- 공동은 다중 요인에 의해 성장:
+  - 지하수 변화율^1.5 (제곱 효과)
+  - 토양 유실량 (로그 스케일)
+  - 강우 강도^1.2
+  - 굴착 깊이^1.3
+  - (100 - 다짐도)
+- **수평 확산**: 공동이 일정 크기 이상이면 주변으로 확산
+- **수직 확장**: 위쪽 토양을 침식하며 지표면으로 성장
+
+**단계 4: 붕괴 발생**
+- 지지력 < 하중 압력 조건 만족 시 붕괴
+- 붕괴 타입 자동 결정:
+  - **Punching 타입**: 다짐도 < 55% 또는 지하수 변화율 > 12
+    → 좁고 깊은 함몰 (위험도 높음)
+  - **Trough 타입**: 다짐도 ≥ 55% 및 지하수 변화율 ≤ 12
+    → 넓고 얕은 함몰 (상대적으로 안전)
+
+#### 4. 파라미터 민감도 (Parameter Sensitivity)
+이 모델의 핵심 특징은 **동적 임계값 시스템**입니다:
+- 붕괴 임계 공동 크기 = 18 - (지하수율/30 × 8) - (강우/50 × 6) - (굴착/25 × 4) - (미다짐도/100 × 10)
+- 조건이 나쁠수록 더 작은 공동에서도 붕괴 발생
+- 이로 인해 파라미터 변화에 따라 붕괴 시점이 100~400틱으로 크게 변화
+
+## HOW TO USE IT
+
+### 초기 설정 단계
+
+#### 1. 기본 파라미터 설정
+**지질 조건:**
+- `soil-type-selection`: 토양 타입 선택
+  - **sand (모래)**: 침식에 가장 취약, 안정성 20-50
+  - **clay (점토)**: 중간 취약성, 안정성 30-70
+  - **gravel (자갈)**: 가장 안정적, 안정성 40-90
+  - **mixed (혼합토)**: 세 가지가 무작위로 섞임
+  
+- `compaction-degree` (0-100): 지반 다짐도
+  - **낮음 (0-40)**: 공동 빠르게 형성, Punching 붕괴 경향
+  - **중간 (40-70)**: 보통 속도 진행
+  - **높음 (70-100)**: 공동 느리게 형성, Trough 붕괴 경향
+
+**환경 조건:**
+- `initial-groundwater-depth` (6-20): 초기 지하수면 깊이 (단위: 심도)
+  - 낮을수록 지하수 영향 커짐
+  
+- `groundwater-change-rate` (0-30): 지하수 변화율
+  - **낮음 (0-10)**: 느린 공동 확장
+  - **중간 (10-20)**: 보통 속도
+  - **높음 (20-30)**: 빠른 공동 확장 및 Punching 붕괴 유도
+
+- `rainfall-intensity` (0-50): 강우 강도
+  - 높을수록 수분 포화도 증가 → 침식 가속
+
+**인위적 요인:**
+- `excavation-depth` (0-25): 굴착 깊이 (단위: m)
+  - 깊을수록 지하수 배수 효과 및 침식 증가
+  - 굴착 위치는 무작위로 설정됨
+
+- `surface-load` (0-50): 지표 하중 (건물, 차량 등)
+  - 높을수록 붕괴 조건 쉽게 만족
+
+**관로 상태:**
+- `pipe-condition` (0-100): 초기 관로 건강도
+  - **양호 (70-100)**: 느린 침식 시작
+  - **불량 (0-40)**: 빠른 침식 시작
+
+#### 2. 시뮬레이션 실행
+1. 파라미터 설정 완료 후 `setup` 버튼 클릭
+2. `go` 버튼 클릭하여 시뮬레이션 시작
+3. `cavity-display` 버튼으로 공동 가시성 토글 가능
+
+### 모니터링 지표
+
+**실시간 통계:**
+- `time-to-collapse`: 붕괴까지 경과 시간 (틱)
+- `total-soil-loss`: 총 토양 유실량 (입자 개수)
+- `cavity-size`: 전체 공동 크기 (부피 합계)
+- `danger-index` (0-100): 위험 지수
+  - 0-30: 안전
+  - 30-60: 주의
+  - 60-90: 위험
+  - 90-100: 매우 위험 / 붕괴
+- `groundwater-flow`: 평균 지하수 흐름 속도
+- `effective-stress`: 유효 응력 (지반 안정성 지표)
+
+## THINGS TO NOTICE
+
+### 시각적 요소
+
+**색상 코드:**
+- **검은색**: 관로 또는 공동
+- **반투명 빨간색 원**: 공동 위치 (크기는 공동 크기 비례)
+- **청록색 화살표**: 지하수 흐름 방향
+- **하늘색 음영**: 지하수 포화 구역
+- **빨간색 (붕괴 시)**: 
+  - 어두운 빨간색: Punching 타입 붕괴
+  - 밝은 빨간색: Trough 타입 붕괴
+
+**토양 입자:**
+- 노란색: 모래 (sand)
+- 주황색: 점토 (clay)
+- 보라색: 자갈 (gravel)
+
+### 주목할 현상
+
+1. **피드백 루프**: 침식 → 관로 악화 → 침식 가속 → 공동 확장 → 더 많은 침식
+2. **비선형 효과**: 파라미터가 소폭 증가해도 결과는 급격히 변화
+3. **공간적 패턴**: 관로가 클러스터로 배치되어 특정 구역에서 집중적으로 공동 발생
+4. **동적 임계값**: 같은 공동 크기라도 환경 조건에 따라 붕괴 여부가 달라짐
+
+## THINGS TO TRY
+
+### 실험 시나리오
+
+#### 실험 1: 토양 타입 비교
+```
+공통 설정: compaction-degree=50, groundwater-change-rate=15, rainfall-intensity=20
+변수: soil-type-selection 변경 (sand → clay → gravel → mixed)
+관찰: 붕괴까지 시간, 공동 형성 속도
+```
+
+#### 실험 2: 다짐도 효과
+```
+공통 설정: soil-type=mixed, groundwater-change-rate=15, rainfall-intensity=20
+변수: compaction-degree (30 → 50 → 70 → 90)
+관찰: 붕괴 타입 변화 (Punching ↔ Trough), 붕괴 시점
+```
+
+#### 실험 3: 복합 위험 요인
+```
+시나리오 A (최악): compaction=20, groundwater=25, rainfall=40, excavation=20
+시나리오 B (보통): compaction=50, groundwater=15, rainfall=20, excavation=10
+시나리오 C (최선): compaction=80, groundwater=5, rainfall=5, excavation=0
+비교: 세 시나리오의 붕괴 시점 차이 (예상: 100틱 vs 250틱 vs 400+틱)
+```
+
+#### 실험 4: 관로 노후화 영향
+```
+변수: pipe-condition (90 → 70 → 50 → 30 → 10)
+고정: 다른 모든 파라미터 동일
+관찰: 초기 관로 상태가 전체 진행에 미치는 영향
+```
+
+#### 실험 5: 굴착 공사 영향
+```
+변수: excavation-depth (0 → 10 → 20 → 25)
+관찰: 굴착 위치 주변 공동 형성 패턴, 배수 효과
+```
+
+### 탐구 질문
+
+1. **어떤 조건에서 Punching 타입 붕괴가 발생하는가?**
+   - 힌트: compaction-degree와 groundwater-change-rate의 조합
+
+2. **파라미터를 극단값으로 설정하면 어떤 일이 발생하는가?**
+   - 모든 값을 최소로: 붕괴가 발생하는가?
+   - 모든 값을 최대로: 얼마나 빨리 붕괴되는가?
+
+3. **공동의 수평 확산과 수직 확장 중 어느 것이 더 빠른가?**
+   - 힌트: cavity-display로 공동 패턴 관찰
+
+4. **지하수 흐름 화살표의 방향은 어떻게 결정되는가?**
+   - 관로와 공동의 위치 관계 관찰
+
+5. **같은 파라미터로 여러 번 실행하면 결과가 같은가?**
+   - 무작위 요소의 영향 파악
+
+## EXTENDING THE MODEL
+
+### 확장 아이디어
+
+#### 1. 추가 요인 모델링
+- **지진 효과**: 진동이 공동 확장을 가속화
+- **계절 변화**: 우기/건기에 따른 지하수 변화
+- **온도 효과**: 동결-융해 사이클
+- **교통 하중**: 도로 위치에 따른 동적 하중
+
+#### 2. 관로 유형 다양화
+- 상수도관 vs 하수관 (누수 패턴 차이)
+- 관로 재질별 노화 속도 (PVC, 철, 콘크리트)
+- 관로 직경에 따른 누수량 차이
+
+#### 3. 모니터링 및 예방 시스템
+- **센서 네트워크**: 공동 조기 감지
+- **보수 작업**: 특정 시점에 관로 교체 (pipe-health 회복)
+- **주입 공법**: 공동에 그라우팅 주입하여 cavity-volume 감소
+
+#### 4. 경제적 분석
+- 예방 비용 vs 붕괴 피해 비용
+- 관로 교체 시기 최적화
+- 위험 지역 우선순위 결정
+
+#### 5. 3D 시각화
+- 지층 단면도를 3D로 확장
+- 공동의 실제 3차원 형태 표현
+
+#### 6. 실제 데이터 연동
+- 특정 도시의 지질 데이터 입력
+- 과거 싱크홀 사례와 비교 검증
+
+## NETLOGO FEATURES
+
+### 사용된 주요 기능
+
+- **Breeds**: 5가지 에이전트 타입 (토양입자, 물흐름, 공동, 굴착, 사람)
+- **Patch 속성**: 복잡한 지층 구조 표현
+- **비선형 함수**: 제곱, 로그 스케일 성장
+- **동적 임계값**: 파라미터 기반 적응형 조건
+- **피드백 루프**: 관로 건강도 감소 메커니즘
+- **공간적 연산**: in-radius, neighbors, distance
+- **확률적 프로세스**: 침식, 확산의 무작위성
+
+## RELATED MODELS
+
+### NetLogo 라이브러리
+- **Erosion**: 물에 의한 토양 침식 기본 모델
+- **Percolation**: 침투 및 확산 패턴
+- **Rumor Mill**: 네트워크 기반 확산 메커니즘
+
+### 관련 분야
+- 지반공학 (Geotechnical Engineering)
+- 수문지질학 (Hydrogeology)
+- 도시 기반시설 관리 (Urban Infrastructure Management)
+- 재난 위험 평가 (Disaster Risk Assessment)
+
+## CREDITS AND REFERENCES
+
+### 개발 정보
+**Author**: Park, Hongjoon  
+**Affiliation**: Chonnam National University  
+**Version**: 7.7  
+**Development Period**: 2025-2026  
+**License**: CC BY-NC-SA 4.0 (Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International)
+
+### 인용 방법
+```
+Park, H. (2025). Sinkhole Simulation Model v7.7. 
+Chonnam National University.
+```
+
+### 참고 문헌
+이 모델은 다음 분야의 이론과 사례를 종합하여 개발되었습니다:
+
+**지반공학 이론:**
+**실제 사례 연구:**
+**관련 연구:**
+
+### 교육적 활용
+이 모델은 다음 교육 목적으로 활용될 수 있습니다:
+- 중·고등학교 과학 (지구과학, 재난안전)
+- 도시계획 및 재난관리 교육
+- 시뮬레이션 기반 학습 (SBL)
+
+
+---
+
+## 버전 히스토리
+
+**v7.7 (2026.01)**
+- 파라미터 민감도 대폭 향상 (비선형 효과 도입)
+- 동적 임계값 시스템 구현
+- 관로 건강도 피드백 루프 추가
+- 붕괴 시점 다양성 확보 (100-400틱 범위)
+
+**v7.6 (2026.01)**
+- 공동 확장 메커니즘 개선
+- 붕괴 타입 자동 결정 로직 추가
+- 주석 시스템 전면 개선
+
+**v7.5 (2025)**
+- 초기 교육용 버전 완성
+- 기본 물리 메커니즘 구현
+- 7층 지층 구조 설정
+
+---
+
+**© 2025 Park, Hongjoon, Chonnam National University. All rights reserved.**]]></info>
+  <turtleShapes>
+    <shape name="default" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="5"></point>
+        <point x="40" y="250"></point>
+        <point x="150" y="205"></point>
+        <point x="260" y="250"></point>
+      </polygon>
+    </shape>
+    <shape name="airplane" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="135" y="15"></point>
+        <point x="120" y="60"></point>
+        <point x="120" y="105"></point>
+        <point x="15" y="165"></point>
+        <point x="15" y="195"></point>
+        <point x="120" y="180"></point>
+        <point x="135" y="240"></point>
+        <point x="105" y="270"></point>
+        <point x="120" y="285"></point>
+        <point x="150" y="270"></point>
+        <point x="180" y="285"></point>
+        <point x="210" y="270"></point>
+        <point x="165" y="240"></point>
+        <point x="180" y="180"></point>
+        <point x="285" y="195"></point>
+        <point x="285" y="165"></point>
+        <point x="180" y="105"></point>
+        <point x="180" y="60"></point>
+        <point x="165" y="15"></point>
+      </polygon>
+    </shape>
+    <shape name="arrow" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="0" y="150"></point>
+        <point x="105" y="150"></point>
+        <point x="105" y="293"></point>
+        <point x="195" y="293"></point>
+        <point x="195" y="150"></point>
+        <point x="300" y="150"></point>
+      </polygon>
+    </shape>
+    <shape name="box" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="285"></point>
+        <point x="285" y="225"></point>
+        <point x="285" y="75"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="135"></point>
+        <point x="15" y="75"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="75"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="75"></point>
+        <point x="15" y="225"></point>
+        <point x="150" y="285"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <line endX="150" startY="285" marked="false" color="255" endY="135" startX="150"></line>
+      <line endX="15" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+      <line endX="285" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+    </shape>
+    <shape name="bug" rotatable="true" editableColorIndex="0">
+      <circle x="96" y="182" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="110" y="127" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <circle x="110" y="75" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <line endX="80" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+      <line endX="220" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+    </shape>
+    <shape name="butterfly" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="209" y="199"></point>
+        <point x="225" y="225"></point>
+        <point x="225" y="255"></point>
+        <point x="195" y="270"></point>
+        <point x="165" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="89" y="198"></point>
+        <point x="75" y="225"></point>
+        <point x="75" y="255"></point>
+        <point x="105" y="270"></point>
+        <point x="135" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="139" y="148"></point>
+        <point x="100" y="105"></point>
+        <point x="55" y="90"></point>
+        <point x="25" y="90"></point>
+        <point x="10" y="105"></point>
+        <point x="10" y="135"></point>
+        <point x="25" y="180"></point>
+        <point x="40" y="195"></point>
+        <point x="85" y="194"></point>
+        <point x="139" y="163"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="162" y="150"></point>
+        <point x="200" y="105"></point>
+        <point x="245" y="90"></point>
+        <point x="275" y="90"></point>
+        <point x="290" y="105"></point>
+        <point x="290" y="135"></point>
+        <point x="275" y="180"></point>
+        <point x="260" y="195"></point>
+        <point x="215" y="195"></point>
+        <point x="162" y="165"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="135" y="225"></point>
+        <point x="120" y="150"></point>
+        <point x="135" y="120"></point>
+        <point x="150" y="105"></point>
+        <point x="165" y="120"></point>
+        <point x="180" y="150"></point>
+        <point x="165" y="225"></point>
+      </polygon>
+      <circle x="135" y="90" marked="false" color="255" diameter="30" filled="true"></circle>
+      <line endX="195" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+      <line endX="105" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+    </shape>
+    <shape name="car" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="300" y="180"></point>
+        <point x="279" y="164"></point>
+        <point x="261" y="144"></point>
+        <point x="240" y="135"></point>
+        <point x="226" y="132"></point>
+        <point x="213" y="106"></point>
+        <point x="203" y="84"></point>
+        <point x="185" y="63"></point>
+        <point x="159" y="50"></point>
+        <point x="135" y="50"></point>
+        <point x="75" y="60"></point>
+        <point x="0" y="150"></point>
+        <point x="0" y="165"></point>
+        <point x="0" y="225"></point>
+        <point x="300" y="225"></point>
+        <point x="300" y="180"></point>
+      </polygon>
+      <circle x="180" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <circle x="30" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="162" y="80"></point>
+        <point x="132" y="78"></point>
+        <point x="134" y="135"></point>
+        <point x="209" y="135"></point>
+        <point x="194" y="105"></point>
+        <point x="189" y="96"></point>
+        <point x="180" y="89"></point>
+      </polygon>
+      <circle x="47" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+      <circle x="195" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+    </shape>
+    <shape name="circle" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="circle 2" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+    </shape>
+    <shape name="cow" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="200" y="193"></point>
+        <point x="197" y="249"></point>
+        <point x="179" y="249"></point>
+        <point x="177" y="196"></point>
+        <point x="166" y="187"></point>
+        <point x="140" y="189"></point>
+        <point x="93" y="191"></point>
+        <point x="78" y="179"></point>
+        <point x="72" y="211"></point>
+        <point x="49" y="209"></point>
+        <point x="48" y="181"></point>
+        <point x="37" y="149"></point>
+        <point x="25" y="120"></point>
+        <point x="25" y="89"></point>
+        <point x="45" y="72"></point>
+        <point x="103" y="84"></point>
+        <point x="179" y="75"></point>
+        <point x="198" y="76"></point>
+        <point x="252" y="64"></point>
+        <point x="272" y="81"></point>
+        <point x="293" y="103"></point>
+        <point x="285" y="121"></point>
+        <point x="255" y="121"></point>
+        <point x="242" y="118"></point>
+        <point x="224" y="167"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="73" y="210"></point>
+        <point x="86" y="251"></point>
+        <point x="62" y="249"></point>
+        <point x="48" y="208"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="25" y="114"></point>
+        <point x="16" y="195"></point>
+        <point x="9" y="204"></point>
+        <point x="23" y="213"></point>
+        <point x="25" y="200"></point>
+        <point x="39" y="123"></point>
+      </polygon>
+    </shape>
+    <shape name="cylinder" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="dot" rotatable="false" editableColorIndex="0">
+      <circle x="90" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+    </shape>
+    <shape name="face happy" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="90" y="239"></point>
+        <point x="62" y="213"></point>
+        <point x="47" y="191"></point>
+        <point x="67" y="179"></point>
+        <point x="90" y="203"></point>
+        <point x="109" y="218"></point>
+        <point x="150" y="225"></point>
+        <point x="192" y="218"></point>
+        <point x="210" y="203"></point>
+        <point x="227" y="181"></point>
+        <point x="251" y="194"></point>
+        <point x="236" y="217"></point>
+        <point x="212" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="face neutral" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="7" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <rectangle endX="240" startY="195" marked="false" color="255" endY="225" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="face sad" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="168"></point>
+        <point x="90" y="184"></point>
+        <point x="62" y="210"></point>
+        <point x="47" y="232"></point>
+        <point x="67" y="244"></point>
+        <point x="90" y="220"></point>
+        <point x="109" y="205"></point>
+        <point x="150" y="198"></point>
+        <point x="192" y="205"></point>
+        <point x="210" y="220"></point>
+        <point x="227" y="242"></point>
+        <point x="251" y="229"></point>
+        <point x="236" y="206"></point>
+        <point x="212" y="183"></point>
+      </polygon>
+    </shape>
+    <shape name="fish" rotatable="false" editableColorIndex="0">
+      <polygon color="-1" filled="true" marked="false">
+        <point x="44" y="131"></point>
+        <point x="21" y="87"></point>
+        <point x="15" y="86"></point>
+        <point x="0" y="120"></point>
+        <point x="15" y="150"></point>
+        <point x="0" y="180"></point>
+        <point x="13" y="214"></point>
+        <point x="20" y="212"></point>
+        <point x="45" y="166"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="135" y="195"></point>
+        <point x="119" y="235"></point>
+        <point x="95" y="218"></point>
+        <point x="76" y="210"></point>
+        <point x="46" y="204"></point>
+        <point x="60" y="165"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="75" y="45"></point>
+        <point x="83" y="77"></point>
+        <point x="71" y="103"></point>
+        <point x="86" y="114"></point>
+        <point x="166" y="78"></point>
+        <point x="135" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="136"></point>
+        <point x="151" y="77"></point>
+        <point x="226" y="81"></point>
+        <point x="280" y="119"></point>
+        <point x="292" y="146"></point>
+        <point x="292" y="160"></point>
+        <point x="287" y="170"></point>
+        <point x="270" y="195"></point>
+        <point x="195" y="210"></point>
+        <point x="151" y="212"></point>
+        <point x="30" y="166"></point>
+      </polygon>
+      <circle x="215" y="106" marked="false" color="255" diameter="30" filled="true"></circle>
+    </shape>
+    <shape name="flag" rotatable="false" editableColorIndex="0">
+      <rectangle endX="75" startY="15" marked="true" color="-1920102913" endY="300" startX="60" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="90" y="150"></point>
+        <point x="270" y="90"></point>
+        <point x="90" y="30"></point>
+      </polygon>
+      <line endX="90" startY="135" marked="true" color="-1920102913" endY="135" startX="75"></line>
+      <line endX="90" startY="45" marked="true" color="-1920102913" endY="45" startX="75"></line>
+    </shape>
+    <shape name="flower" rotatable="false" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="135" y="120"></point>
+        <point x="165" y="165"></point>
+        <point x="180" y="210"></point>
+        <point x="180" y="240"></point>
+        <point x="150" y="300"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="240"></point>
+        <point x="195" y="195"></point>
+        <point x="165" y="135"></point>
+      </polygon>
+      <circle x="85" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="147" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="192" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="85" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="70" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="25" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="96" y="51" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="113" y="68" marked="false" color="255" diameter="74" filled="true"></circle>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="189" y="233"></point>
+        <point x="219" y="188"></point>
+        <point x="249" y="173"></point>
+        <point x="279" y="188"></point>
+        <point x="234" y="218"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="180" y="255"></point>
+        <point x="150" y="210"></point>
+        <point x="105" y="210"></point>
+        <point x="75" y="240"></point>
+        <point x="135" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="house" rotatable="false" editableColorIndex="0">
+      <rectangle endX="255" startY="120" marked="true" color="-1920102913" endY="285" startX="45" filled="true"></rectangle>
+      <rectangle endX="180" startY="210" marked="false" color="255" endY="285" startX="120" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="120"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+      <line endX="270" startY="120" marked="false" color="255" endY="120" startX="30"></line>
+    </shape>
+    <shape name="leaf" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="210"></point>
+        <point x="135" y="195"></point>
+        <point x="120" y="210"></point>
+        <point x="60" y="210"></point>
+        <point x="30" y="195"></point>
+        <point x="60" y="180"></point>
+        <point x="60" y="165"></point>
+        <point x="15" y="135"></point>
+        <point x="30" y="120"></point>
+        <point x="15" y="105"></point>
+        <point x="40" y="104"></point>
+        <point x="45" y="90"></point>
+        <point x="60" y="90"></point>
+        <point x="90" y="105"></point>
+        <point x="105" y="120"></point>
+        <point x="120" y="120"></point>
+        <point x="105" y="60"></point>
+        <point x="120" y="60"></point>
+        <point x="135" y="30"></point>
+        <point x="150" y="15"></point>
+        <point x="165" y="30"></point>
+        <point x="180" y="60"></point>
+        <point x="195" y="60"></point>
+        <point x="180" y="120"></point>
+        <point x="195" y="120"></point>
+        <point x="210" y="105"></point>
+        <point x="240" y="90"></point>
+        <point x="255" y="90"></point>
+        <point x="263" y="104"></point>
+        <point x="285" y="105"></point>
+        <point x="270" y="120"></point>
+        <point x="285" y="135"></point>
+        <point x="240" y="165"></point>
+        <point x="240" y="180"></point>
+        <point x="270" y="195"></point>
+        <point x="240" y="210"></point>
+        <point x="180" y="210"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="195"></point>
+        <point x="135" y="240"></point>
+        <point x="120" y="255"></point>
+        <point x="105" y="255"></point>
+        <point x="105" y="285"></point>
+        <point x="135" y="285"></point>
+        <point x="165" y="240"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+    </shape>
+    <shape name="line" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="300" startX="150"></line>
+    </shape>
+    <shape name="line half" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="150" startX="150"></line>
+    </shape>
+    <shape name="pentagon" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="15"></point>
+        <point x="15" y="120"></point>
+        <point x="60" y="285"></point>
+        <point x="240" y="285"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+    </shape>
+    <shape name="person" rotatable="false" editableColorIndex="0">
+      <circle x="110" y="5" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="120" y="195"></point>
+        <point x="90" y="285"></point>
+        <point x="105" y="300"></point>
+        <point x="135" y="300"></point>
+        <point x="150" y="225"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="300"></point>
+        <point x="210" y="285"></point>
+        <point x="180" y="195"></point>
+        <point x="195" y="90"></point>
+      </polygon>
+      <rectangle endX="172" startY="79" marked="true" color="-1920102913" endY="94" startX="127" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="195" y="90"></point>
+        <point x="240" y="150"></point>
+        <point x="225" y="180"></point>
+        <point x="165" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="60" y="150"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="105"></point>
+      </polygon>
+    </shape>
+    <shape name="plant" rotatable="false" editableColorIndex="0">
+      <rectangle endX="165" startY="90" marked="true" color="-1920102913" endY="300" startX="135" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="255"></point>
+        <point x="90" y="210"></point>
+        <point x="45" y="195"></point>
+        <point x="75" y="255"></point>
+        <point x="135" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="255"></point>
+        <point x="210" y="210"></point>
+        <point x="255" y="195"></point>
+        <point x="225" y="255"></point>
+        <point x="165" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="180"></point>
+        <point x="90" y="135"></point>
+        <point x="45" y="120"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="180"></point>
+        <point x="165" y="210"></point>
+        <point x="225" y="180"></point>
+        <point x="255" y="120"></point>
+        <point x="210" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="105"></point>
+        <point x="90" y="60"></point>
+        <point x="45" y="45"></point>
+        <point x="75" y="105"></point>
+        <point x="135" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="105"></point>
+        <point x="165" y="135"></point>
+        <point x="225" y="105"></point>
+        <point x="255" y="45"></point>
+        <point x="210" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="90"></point>
+        <point x="120" y="45"></point>
+        <point x="150" y="15"></point>
+        <point x="180" y="45"></point>
+        <point x="165" y="90"></point>
+      </polygon>
+    </shape>
+    <shape name="sheep" rotatable="false" editableColorIndex="15">
+      <circle x="203" y="65" marked="true" color="-1" diameter="88" filled="true"></circle>
+      <circle x="70" y="65" marked="true" color="-1" diameter="162" filled="true"></circle>
+      <circle x="150" y="105" marked="true" color="-1" diameter="120" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="218" y="120"></point>
+        <point x="240" y="165"></point>
+        <point x="255" y="165"></point>
+        <point x="278" y="120"></point>
+      </polygon>
+      <circle x="214" y="72" marked="false" color="-1920102913" diameter="67" filled="true"></circle>
+      <rectangle endX="179" startY="223" marked="true" color="-1" endY="298" startX="164" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="45" y="285"></point>
+        <point x="30" y="285"></point>
+        <point x="30" y="240"></point>
+        <point x="15" y="195"></point>
+        <point x="45" y="210"></point>
+      </polygon>
+      <circle x="3" y="83" marked="true" color="-1" diameter="150" filled="true"></circle>
+      <rectangle endX="80" startY="221" marked="true" color="-1" endY="296" startX="65" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="195" y="285"></point>
+        <point x="210" y="285"></point>
+        <point x="210" y="240"></point>
+        <point x="240" y="210"></point>
+        <point x="195" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="276" y="85"></point>
+        <point x="285" y="105"></point>
+        <point x="302" y="99"></point>
+        <point x="294" y="83"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="219" y="85"></point>
+        <point x="210" y="105"></point>
+        <point x="193" y="99"></point>
+        <point x="201" y="83"></point>
+      </polygon>
+    </shape>
+    <shape name="square" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+    </shape>
+    <shape name="square 2" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+      <rectangle endX="240" startY="60" marked="false" color="255" endY="240" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="star" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="151" y="1"></point>
+        <point x="185" y="108"></point>
+        <point x="298" y="108"></point>
+        <point x="207" y="175"></point>
+        <point x="242" y="282"></point>
+        <point x="151" y="216"></point>
+        <point x="59" y="282"></point>
+        <point x="94" y="175"></point>
+        <point x="3" y="108"></point>
+        <point x="116" y="108"></point>
+      </polygon>
+    </shape>
+    <shape name="target" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <circle x="60" y="60" marked="true" color="-1920102913" diameter="180" filled="true"></circle>
+      <circle x="90" y="90" marked="false" color="255" diameter="120" filled="true"></circle>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+    </shape>
+    <shape name="tree" rotatable="false" editableColorIndex="0">
+      <circle x="118" y="3" marked="true" color="-1920102913" diameter="94" filled="true"></circle>
+      <rectangle endX="180" startY="195" marked="false" color="-1653716737" endY="300" startX="120" filled="true"></rectangle>
+      <circle x="65" y="21" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="116" y="41" marked="true" color="-1920102913" diameter="127" filled="true"></circle>
+      <circle x="45" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+      <circle x="104" y="74" marked="true" color="-1920102913" diameter="152" filled="true"></circle>
+    </shape>
+    <shape name="triangle" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+    </shape>
+    <shape name="triangle 2" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="151" y="99"></point>
+        <point x="225" y="223"></point>
+        <point x="75" y="224"></point>
+      </polygon>
+    </shape>
+    <shape name="truck" rotatable="false" editableColorIndex="0">
+      <rectangle endX="195" startY="45" marked="true" color="-1920102913" endY="187" startX="4" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="296" y="193"></point>
+        <point x="296" y="150"></point>
+        <point x="259" y="134"></point>
+        <point x="244" y="104"></point>
+        <point x="208" y="104"></point>
+        <point x="207" y="194"></point>
+      </polygon>
+      <rectangle endX="195" startY="60" marked="false" color="-1" endY="105" startX="195" filled="true"></rectangle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="238" y="112"></point>
+        <point x="252" y="141"></point>
+        <point x="219" y="141"></point>
+        <point x="218" y="112"></point>
+      </polygon>
+      <circle x="234" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <rectangle endX="214" startY="185" marked="true" color="-1920102913" endY="194" startX="181" filled="true"></rectangle>
+      <circle x="144" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="144" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="234" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+    </shape>
+    <shape name="turtle" rotatable="true" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="215" y="204"></point>
+        <point x="240" y="233"></point>
+        <point x="246" y="254"></point>
+        <point x="228" y="266"></point>
+        <point x="215" y="252"></point>
+        <point x="193" y="210"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="195" y="90"></point>
+        <point x="225" y="75"></point>
+        <point x="245" y="75"></point>
+        <point x="260" y="89"></point>
+        <point x="269" y="108"></point>
+        <point x="261" y="124"></point>
+        <point x="240" y="105"></point>
+        <point x="225" y="105"></point>
+        <point x="210" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="105" y="90"></point>
+        <point x="75" y="75"></point>
+        <point x="55" y="75"></point>
+        <point x="40" y="89"></point>
+        <point x="31" y="108"></point>
+        <point x="39" y="124"></point>
+        <point x="60" y="105"></point>
+        <point x="75" y="105"></point>
+        <point x="90" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="132" y="85"></point>
+        <point x="134" y="64"></point>
+        <point x="107" y="51"></point>
+        <point x="108" y="17"></point>
+        <point x="150" y="2"></point>
+        <point x="192" y="18"></point>
+        <point x="192" y="52"></point>
+        <point x="169" y="65"></point>
+        <point x="172" y="87"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="85" y="204"></point>
+        <point x="60" y="233"></point>
+        <point x="54" y="254"></point>
+        <point x="72" y="266"></point>
+        <point x="85" y="252"></point>
+        <point x="107" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="119" y="75"></point>
+        <point x="179" y="75"></point>
+        <point x="209" y="101"></point>
+        <point x="224" y="135"></point>
+        <point x="220" y="225"></point>
+        <point x="175" y="261"></point>
+        <point x="128" y="261"></point>
+        <point x="81" y="224"></point>
+        <point x="74" y="135"></point>
+        <point x="88" y="99"></point>
+      </polygon>
+    </shape>
+    <shape name="wheel" rotatable="false" editableColorIndex="0">
+      <circle x="3" y="3" marked="true" color="-1920102913" diameter="294" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <line endX="150" startY="285" marked="true" color="-1920102913" endY="15" startX="150"></line>
+      <line endX="285" startY="150" marked="true" color="-1920102913" endY="150" startX="15"></line>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+      <line endX="79" startY="40" marked="true" color="-1920102913" endY="269" startX="216"></line>
+      <line endX="269" startY="84" marked="true" color="-1920102913" endY="221" startX="40"></line>
+      <line endX="269" startY="216" marked="true" color="-1920102913" endY="79" startX="40"></line>
+      <line endX="221" startY="40" marked="true" color="-1920102913" endY="269" startX="84"></line>
+    </shape>
+    <shape name="wolf" rotatable="false" editableColorIndex="0">
+      <polygon color="255" filled="true" marked="false">
+        <point x="253" y="133"></point>
+        <point x="245" y="131"></point>
+        <point x="245" y="133"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="2" y="194"></point>
+        <point x="13" y="197"></point>
+        <point x="30" y="191"></point>
+        <point x="38" y="193"></point>
+        <point x="38" y="205"></point>
+        <point x="20" y="226"></point>
+        <point x="20" y="257"></point>
+        <point x="27" y="265"></point>
+        <point x="38" y="266"></point>
+        <point x="40" y="260"></point>
+        <point x="31" y="253"></point>
+        <point x="31" y="230"></point>
+        <point x="60" y="206"></point>
+        <point x="68" y="198"></point>
+        <point x="75" y="209"></point>
+        <point x="66" y="228"></point>
+        <point x="65" y="243"></point>
+        <point x="82" y="261"></point>
+        <point x="84" y="268"></point>
+        <point x="100" y="267"></point>
+        <point x="103" y="261"></point>
+        <point x="77" y="239"></point>
+        <point x="79" y="231"></point>
+        <point x="100" y="207"></point>
+        <point x="98" y="196"></point>
+        <point x="119" y="201"></point>
+        <point x="143" y="202"></point>
+        <point x="160" y="195"></point>
+        <point x="166" y="210"></point>
+        <point x="172" y="213"></point>
+        <point x="173" y="238"></point>
+        <point x="167" y="251"></point>
+        <point x="160" y="248"></point>
+        <point x="154" y="265"></point>
+        <point x="169" y="264"></point>
+        <point x="178" y="247"></point>
+        <point x="186" y="240"></point>
+        <point x="198" y="260"></point>
+        <point x="200" y="271"></point>
+        <point x="217" y="271"></point>
+        <point x="219" y="262"></point>
+        <point x="207" y="258"></point>
+        <point x="195" y="230"></point>
+        <point x="192" y="198"></point>
+        <point x="210" y="184"></point>
+        <point x="227" y="164"></point>
+        <point x="242" y="144"></point>
+        <point x="259" y="145"></point>
+        <point x="284" y="151"></point>
+        <point x="277" y="141"></point>
+        <point x="293" y="140"></point>
+        <point x="299" y="134"></point>
+        <point x="297" y="127"></point>
+        <point x="273" y="119"></point>
+        <point x="270" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="-1" y="195"></point>
+        <point x="14" y="180"></point>
+        <point x="36" y="166"></point>
+        <point x="40" y="153"></point>
+        <point x="53" y="140"></point>
+        <point x="82" y="131"></point>
+        <point x="134" y="133"></point>
+        <point x="159" y="126"></point>
+        <point x="188" y="115"></point>
+        <point x="227" y="108"></point>
+        <point x="236" y="102"></point>
+        <point x="238" y="98"></point>
+        <point x="268" y="86"></point>
+        <point x="269" y="92"></point>
+        <point x="281" y="87"></point>
+        <point x="269" y="103"></point>
+        <point x="269" y="113"></point>
+      </polygon>
+    </shape>
+    <shape name="x" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="270" y="75"></point>
+        <point x="225" y="30"></point>
+        <point x="30" y="225"></point>
+        <point x="75" y="270"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="75"></point>
+        <point x="75" y="30"></point>
+        <point x="270" y="225"></point>
+        <point x="225" y="270"></point>
+      </polygon>
+    </shape>
+  </turtleShapes>
+  <linkShapes>
+    <shape name="default" curviness="0.0">
+      <lines>
+        <line x="-0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+        <line x="0.0" visible="true">
+          <dash value="1.0"></dash>
+          <dash value="0.0"></dash>
+        </line>
+        <line x="0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+      </lines>
+      <indicator>
+        <shape name="link direction" rotatable="true" editableColorIndex="0">
+          <line endX="90" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+          <line endX="210" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+        </shape>
+      </indicator>
+    </shape>
+  </linkShapes>
+  <previewCommands>setup repeat 75 [ go ]</previewCommands>
+</model>
