@@ -13,7 +13,7 @@ NetLogo를 활용한 도심 지반침하 현상의 교육용 시뮬레이션입�
 
 ## 📚 문서
 
-- [시뮬레이션 아키텍처](docs/030%20아키텍처%20보완.pdf)
+- [시뮬레이션 아키텍처](docs/030%20아키텍처_보완.pdf)
 - [인포그래픽](images/040%20anatomy%202_eng.png)
 - [발표 자료](docs/050%20Slide_Sinkhole_Mechanism_Simulation.pdf)
 
