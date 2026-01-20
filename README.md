@@ -31,7 +31,7 @@ NetLogo를 활용한 도심 지반침하 현상의 교육용 시뮬레이션입�
 ## 🚀 설치 및 실행
 
 ### 필요한 프로그램
-1. **NetLogo 6.x 이상** 다운로드: https://ccl.northwestern.edu/netlogo/
+1. **NetLogo 7.x 이상** 다운로드: [ccl.northwestern.edu/netlogo](https://www.netlogo.org/)
 
 ### 실행 방법
 1. 이 저장소를 다운로드 (Code → Download ZIP)
