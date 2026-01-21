@@ -1,4 +1,5 @@
-# 도심 지반침하 시뮬레이션   (Urban Sinkhole Formation Simulation)
+# 도심 지반침하 시뮬레이션  
+(Urban Sinkhole Formation Simulation)
 
 NetLogo를 활용한 도심 지반침하 현상의 교육용 시뮬레이션입니다.
 
