@@ -21,6 +21,9 @@ NetLogo를 활용한 도심 지반침하 현상의 교육용 시뮬레이션입�
 
 ## 🎥 빠른 시작
 
+### 웹 실행
+- **링크** : [https://oralbmint.github.io/netlogo-sinkhole-simulation](https://oralbmint.github.io/netlogo-sinkhole-simulation/)
+- 
 ### 소개 자료
 - **슬라이드** : [Slide_Sinkhole_Mechanism_Simulation.pdf](docs/Slide_Sinkhole_Mechanism_Simulation.pdf)
 -  **소개영상** : [video_싱크홀_시뮬레이션.mp4](https://youtu.be/FX2izhwPO7s)
@@ -30,7 +33,7 @@ NetLogo를 활용한 도심 지반침하 현상의 교육용 시뮬레이션입�
 - [시뮬레이션 아키텍처](docs/아키텍처_v2.pdf) - 변수들 간의 관계도
 - [개요 인포그래픽](images/anatomy2_eng.png) - 시각적 개요
 
-## 🚀 설치 및 실행
+## 🚀 PC 실행(설치 및 실행)
 
 ### 필요한 프로그램
 1. **NetLogo 7.x 이상** 다운로드: [ccl.northwestern.edu/netlogo](https://www.netlogo.org/)
