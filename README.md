@@ -1,5 +1,7 @@
 # 도심 지반침하 시뮬레이션  
-(Urban Sinkhole Formation Simulation)
+<<<<<<< HEAD
+## (Urban Sinkhole Formation Simulation)
+>>>>>>> 5b0e5d6 (rename)
 
 NetLogo를 활용한 도심 지반침하 현상의 교육용 시뮬레이션입니다.
 
@@ -22,12 +24,12 @@ NetLogo를 활용한 도심 지반침하 현상의 교육용 시뮬레이션입�
 ## 🎥 빠른 시작
 
 ### 소개 자료
-- **슬라이드** : [050_Slide_Sinkhole_Mechanism_Simulation.pdf](docs/Slide_Sinkhole_Mechanism_Simulation.pdf)
--  **소개영상** : [060_video_싱크홀_시뮬레이션.mp4](https://youtu.be/FX2izhwPO7s)
--  **팟캐스트** : [070_podcast_싱크홀_붕괴를_부르는_지하의_연쇄_반응.m4a](https://drive.google.com/file/d/1nWRs424oPW9Hix95Z2lRwkS37xSzMvp1/view?usp=sharing)
+- **슬라이드** : [Slide_Sinkhole_Mechanism_Simulation.pdf](docs/Slide_Sinkhole_Mechanism_Simulation.pdf)
+-  **소개영상** : [video_싱크홀_시뮬레이션.mp4](https://youtu.be/FX2izhwPO7s)
+-  **팟캐스트** : [podcast_싱크홀_붕괴를_부르는_지하의_연쇄_반응.m4a](https://drive.google.com/file/d/1nWRs424oPW9Hix95Z2lRwkS37xSzMvp1/view?usp=sharing)
 
 ### 기술 문서
-- [시뮬레이션 아키텍처](docs/인포그래피_아키텍처_v2.pdf) - 변수들 간의 관계도
+- [시뮬레이션 아키텍처](docs/아키텍처_v2.pdf) - 변수들 간의 관계도
 - [개요 인포그래픽](images/anatomy2_eng.png) - 시각적 개요
 
 ## 🚀 설치 및 실행
