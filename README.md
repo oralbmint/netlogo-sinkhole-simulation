@@ -1,7 +1,5 @@
 # 도심 지반침하 시뮬레이션  
-<<<<<<< HEAD
 ## (Urban Sinkhole Formation Simulation)
->>>>>>> 5b0e5d6 (rename)
 
 NetLogo를 활용한 도심 지반침하 현상의 교육용 시뮬레이션입니다.
 
