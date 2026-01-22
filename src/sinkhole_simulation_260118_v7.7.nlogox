@@ -222,7 +222,7 @@ to setup-groundwater
 
   ask patches [
     ; 지하수면 아래 패치에 수분 포화도 설정
-    if pycor < max-pycor - groundwater-base-depth [
+    if pycor <= max-pycor - groundwater-base-depth [
       set water-saturation random 50        ; 0~49% 무작위 포화도
       set pcolor sky + (random-float 1.5)   ; 파란색 계열로 시각화
     ]
