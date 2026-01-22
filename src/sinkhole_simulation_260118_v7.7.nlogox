@@ -25,7 +25,6 @@ globals [
   cavity-size              ; 전체 공동 크기 (모든 공동 부피의 합)
   collapse-occurred?       ; 붕괴 발생 여부
   time-to-collapse         ; 붕괴까지 걸린 시간 (틱 단위)
-  groundwater-flow         ; 지하수 흐름 속도 (전역변수)
   effective-stress         ; 유효 응력
   danger-index             ; 위험 지수 (0-100)
   excavation-position      ; 굴착 공사 위치 (x 좌표)
@@ -793,15 +792,8 @@ to update-statistics
     set danger-index 100
   ]
 
-  ; 평균 지하수 흐름 속도 계산
-  ifelse any? water-flows [
-    set groundwater-flow mean [velocity] of water-flows
-  ] [
-    set groundwater-flow 0
-  ]
-
   ; 유효 응력 계산 (다짐도, 공동 크기, 토양 유실 종합 고려)
-  set effective-stress compaction-degree * (1 - cavity-size / 100) * (1 - total-soil-loss / 1000)
+  set effective-stress compaction-degree * (1 - cavity-size / 1000) * (1 - total-soil-loss / 1000)
 end
 
 ; ================================================================================
@@ -818,7 +810,7 @@ end
     <slider x="10" step="1" y="429" max="100" width="213" display="pipe-condition" height="50" min="0" direction="Horizontal" default="61.0" variable="pipe-condition"></slider>
     <slider x="10" step="5" y="349" max="50" width="214" display="rainfall-intensity" height="50" min="0" direction="Horizontal" default="15.0" variable="rainfall-intensity"></slider>
     <slider x="10" step="1" y="287" max="30" width="213" display="groundwater-change-rate" height="50" min="0" direction="Horizontal" default="5.0" variable="groundwater-change-rate"></slider>
-    <slider x="10" step="1" y="225" max="29" width="212" display="initial-groundwater-depth" height="50" min="6" direction="Horizontal" default="9.0" variable="initial-groundwater-depth"></slider>
+    <slider x="10" step="1" y="225" max="29" width="212" display="initial-groundwater-depth" height="50" min="6" direction="Horizontal" default="25.0" variable="initial-groundwater-depth"></slider>
     <chooser x="10" y="137" height="60" variable="soil-type-selection" current="0" width="211" display="soil-type-selection">
       <choice type="string" value="mixed"></choice>
       <choice type="string" value="sand"></choice>
@@ -843,9 +835,7 @@ end
       </pen>
     </plot>
     <button x="669" y="8" height="35" disableUntilTicks="false" forever="false" kind="Observer" width="120">cavity-display</button>
-    <monitor x="673" precision="2" y="470" height="60" fontSize="11" width="140" display="Groundwater Flow">groundwater-flow</monitor>
     <monitor x="672" precision="17" y="50" height="60" fontSize="11" width="100" display="soil-particles">count soil-particles</monitor>
-    <monitor x="673" precision="1" y="540" height="60" fontSize="11" width="140" display="Effective Stress">effective-stress</monitor>
     <monitor x="673" precision="1" y="190" height="60" fontSize="11" width="105" display="Cavity Size">cavity-size</monitor>
     <monitor x="673" precision="0" y="260" height="60" fontSize="11" width="103" display="Collapse?">collapse-occurred?</monitor>
     <monitor x="673" precision="0" y="330" height="60" fontSize="11" width="115" display="Time to Collapse">time-to-collapse</monitor>
@@ -853,6 +843,7 @@ end
     <monitor x="673" precision="0" y="120" height="60" fontSize="11" width="107" display="Total Soil Loss">total-soil-loss</monitor>
     <button x="82" y="8" height="35" disableUntilTicks="false" forever="true" kind="Observer" width="63" display="Go">go</button>
     <button x="151" y="8" height="35" disableUntilTicks="false" forever="false" kind="Observer" width="63" display="Go Once">go</button>
+    <monitor x="671" precision="1" y="471" height="60" fontSize="11" width="140" display="Effective Stress">effective-stress</monitor>
   </widgets>
   <info><![CDATA[# SINKHOLE SIMULATION - Educational Version
 
@@ -978,7 +969,6 @@ This simulation is an educational model that demonstrates the formation mechanis
   - 30-60: 주의
   - 60-90: 위험
   - 90-100: 매우 위험 / 붕괴
-- `groundwater-flow`: 평균 지하수 흐름 속도
 - `effective-stress`: 유효 응력 (지반 안정성 지표)
 
 ## THINGS TO NOTICE
