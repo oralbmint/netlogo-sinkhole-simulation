@@ -27,7 +27,7 @@ NetLogo를 활용한 도심 지반침하 현상의 교육용 시뮬레이션입�
 ### 소개 자료
 - **슬라이드** : [Slide_Sinkhole_Mechanism_Simulation.pdf](docs/Slide_Sinkhole_Mechanism_Simulation.pdf)
 -  **소개영상** : [video_싱크홀_시뮬레이션.mp4](https://youtu.be/FX2izhwPO7s)
--  **팟캐스트** : [podcast_싱크홀_붕괴를_부르는_지하의_연쇄_반응.m4a](https://drive.google.com/file/d/1nWRs424oPW9Hix95Z2lRwkS37xSzMvp1/view?usp=sharing)
+-  **팟캐스트** : [podcast_싱크홀_붕괴를_부르는_지하의_연쇄_반응.m4a](https://youtu.be/BbjHvq9M8kc)
 
 ### 기술 문서
 - [시뮬레이션 아키텍처](docs/아키텍처_v2.pdf) - 변수들 간의 관계도
